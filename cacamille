@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pour Camille</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@1,9..144,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --nuit: #0b1f23;
+    --texte: #fbeee6;
+    --ruban: #ff7a6b;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1.1rem;
+    overflow: hidden;
+    background: var(--nuit);
+    color: var(--texte);
+    font-family: "Fraunces", Georgia, serif;
+  }
+
+  /* Fond : nappes de couleur qui dérivent doucement */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: -20%;
+    z-index: -1;
+    background:
+      radial-gradient(40% 35% at 25% 30%, #ff7a6b3a, transparent 70%),
+      radial-gradient(35% 40% at 75% 65%, #a98bff3a, transparent 70%),
+      radial-gradient(45% 45% at 50% 50%, #1d4a4a, transparent 75%);
+    animation: derive 24s ease-in-out infinite alternate;
+  }
+  @keyframes derive {
+    to { transform: translate(4%, -3%) rotate(6deg) scale(1.08); }
+  }
+
+  canvas {
+    width: min(88vw, 50vh, 440px);
+    aspect-ratio: 4 / 5;
+    height: auto;
+    cursor: grab;
+    touch-action: none;
+  }
+  canvas:active { cursor: grabbing; }
+
+  /* Message en verre dépoli */
+  .message {
+    text-align: center;
+    padding: 1rem 1.8rem 1.1rem;
+    background: rgba(255, 255, 255, .06);
+    border: 1px solid rgba(255, 255, 255, .14);
+    border-radius: 22px;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    opacity: 0;
+    animation: apparait 1.4s ease-out forwards;
+    animation-delay: 4.6s;
+  }
+  @keyframes apparait { to { opacity: 1; } }
+
+  .message h1 {
+    margin: 0;
+    font-size: clamp(1.9rem, 7vw, 3rem);
+    font-weight: 400;
+    font-style: italic;
+  }
+  .message p {
+    margin: .3rem 0 0;
+    font-size: clamp(.95rem, 3vw, 1.1rem);
+    font-style: italic;
+    color: #e9c9bd;
+  }
+
+  button {
+    margin-top: .8rem;
+    padding: .45rem 1.1rem;
+    font: inherit;
+    font-size: .9rem;
+    font-style: italic;
+    color: var(--texte);
+    background: transparent;
+    border: 1px solid #ffffff55;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background .2s;
+  }
+  button:hover { background: #ffffff1a; }
+  button:focus-visible { outline: 2px solid var(--ruban); outline-offset: 3px; }
+
+  /* Pétales qui tombent */
+  .petale {
+    position: fixed;
+    top: 0;
+    width: 12px;
+    height: 16px;
+    border-radius: 80% 0 80% 0;
+    opacity: 0;
+    pointer-events: none;
+    animation: chute linear infinite;
+  }
+  @keyframes chute {
+    0%   { opacity: 0; transform: translate(0, -10vh) rotate(0deg); }
+    8%   { opacity: .8; }
+    100% { opacity: 0; transform: translate(var(--dx), 110vh) rotate(540deg); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    body::before { animation: none; }
+    .message { animation-duration: .01ms; animation-delay: 0s; }
+    .petale { display: none; }
+  }
+</style>
+</head>
+<body>
+
+  <canvas id="cv" aria-label="Un bouquet de fleurs en 3D qui tourne lentement"></canvas>
+
+  <div class="message">
+    <h1>Pour Camille</h1>
+    <button id="rejouer" type="button">Revoir le bouquet</button>
+  </div>
+
+<script>
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+const W = 400, H = 500;
+const reduit = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const m = reduit ? 0 : 1; // coupe les mouvements si demandé
+
+function redim() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = cv.clientWidth;
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(w * dpr * H / W);
+  ctx.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
+}
+addEventListener("resize", redim);
+redim();
+
+/* ---------- Utilitaires ---------- */
+const clamp = x => Math.max(0, Math.min(1, x));
+const outCubic = x => 1 - Math.pow(1 - x, 3);
+const outBack = x => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const NUIT = [15, 42, 46];
+const mix = (rgb, k) => `rgb(${rgb.map((v, i) => Math.round(v + (NUIT[i] - v) * k)).join(",")})`;
+
+/* ---------- Projection 3D ---------- */
+const F = 620;                 // focale
+function proj(x, z, h) {
+  const s = F / (F - z);       // z > 0 = vers nous
+  return { x: 200 + x * s, y: 440 - h * s + z * 0.12, s, z };
+}
+const ombre = z => 0.38 * (1 - clamp((z + 135) / 270)); // fleurs au fond plus sombres
+
+/* ---------- Fleurs ---------- */
+const COUL = [
+  ["#ff6f9f", "#ff9fc0", "#ffd36b"],
+  ["#ff8a65", "#ffb199", "#fff0a8"],
+  ["#a98bff", "#cdbcff", "#ffe9a8"],
+  ["#ffc2d4", "#ffffff", "#f6b93b"],
+  ["#ff5f8f", "#ff8fb2", "#fff0a8"],
+  ["#f6b93b", "#fad56a", "#5a3417"]
+];
+const fleurs = [];
+function ajoute(r, phi, h, t, n, d, ci) {
+  const c = COUL[ci];
+  fleurs.push({
+    x: r * Math.cos(phi), z: r * Math.sin(phi), h, t, n, d,
+    c: hex(c[0]), c2: hex(c[1]), coeur: hex(c[2]), ph: Math.random() * 6.28
+  });
+}
+ajoute(0, 0, 352, 46, 14, 0.2, 5);                                   // tournesol au sommet
+for (let i = 0; i < 5; i++) ajoute(78, i * 2 * Math.PI / 5 + 0.3, 305, 36, 9, 0.5 + i * 0.18, i % 5);
+for (let i = 0; i < 7; i++) ajoute(135, i * 2 * Math.PI / 7, 240, 31, 8, 1.1 + i * 0.15, (i + 2) % 5);
+
+const feuilles = [];
+for (let i = 0; i < 6; i++) {
+  const phi = i * Math.PI / 3 + 0.5;
+  feuilles.push({ x: 100 * Math.cos(phi), z: 100 * Math.sin(phi), h: 130, d: 0.9 + i * 0.12 });
+}
+
+const VERT = hex("#5fbf7a"), VERT2 = hex("#3f9d64");
+
+/* ---------- Dessin ---------- */
+function petale(t, a, col, k) {
+  ctx.save();
+  ctx.rotate(a);
+  ctx.fillStyle = col;
+  ctx.beginPath();
+  ctx.ellipse(0, -t * 0.55 * k, t * 0.26 * k, t * 0.55 * k, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function dessineFleur(p, f, b, rot, ombreK) {
+  if (b <= 0) return;
+  const size = f.t * p.s;
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(rot - (1 - Math.min(b, 1)) * 1.2);
+  ctx.scale(b, b);
+  const col2 = mix(f.c2, ombreK), col1 = mix(f.c, ombreK);
+  for (let i = 0; i < f.n; i++) petale(size, (2 * Math.PI / f.n) * (i + 0.5), col2, 1);
+  for (let i = 0; i < f.n; i++) petale(size, (2 * Math.PI / f.n) * i, col1, 0.8);
+  ctx.fillStyle = mix(f.coeur, ombreK);
+  ctx.beginPath(); ctx.arc(0, 0, size * 0.2, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,.15)"; ctx.lineWidth = 1.2; ctx.stroke();
+  ctx.restore();
+}
+
+function pointTige(f, u, c, s, bob) {
+  const a = 2 * (1 - u) * u, b = u * u;
+  const x = a * f.x * 0.1 + b * f.x;
+  const z = a * f.z * 0.1 + b * f.z;
+  const h = a * f.h * 0.45 + b * f.h + bob * u;
+  return proj(x * c - z * s, x * s + z * c, h);
+}
+
+function dessineEmballage(alpha) {
+  if (alpha <= 0) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const poly = (pts, col) => {
+    ctx.fillStyle = col; ctx.beginPath();
+    pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+    ctx.closePath(); ctx.fill();
+  };
+  poly([[118, 392], [282, 392], [226, 494], [174, 494]], "#ecd9b8");
+  poly([[118, 392], [200, 410], [174, 494]], "#dcc59c");
+  poly([[282, 392], [200, 410], [226, 494]], "#f4e6cb");
+  ctx.fillStyle = "#ff7a6b";
+  ctx.fillRect(176, 440, 48, 12);
+  [[-1, 0], [1, 0]].forEach(([d]) => {
+    ctx.beginPath();
+    ctx.moveTo(200, 446);
+    ctx.bezierCurveTo(200 + d * 30, 420, 200 + d * 40, 450, 200 + d * 22, 458);
+    ctx.closePath(); ctx.fill();
+  });
+  ctx.fillStyle = "#e5604f";
+  ctx.beginPath(); ctx.arc(200, 446, 6, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+/* ---------- Boucle d'animation ---------- */
+let t0 = performance.now(), last = t0;
+let theta = 0.4, vel = 0, auto = 0.35 * m;   // rad/s
+let drag = false, lastX = 0, lastDelta = 0;
+
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  const t = (now - t0) / 1000 + (reduit ? 10 : 0);
+
+  if (!drag) {
+    vel += (auto - vel) * Math.min(1, dt * 1.5);
+    theta += vel * dt;
+  }
+  const c = Math.cos(theta), s = Math.sin(theta);
+
+  ctx.clearRect(0, 0, W, H);
+  const items = [];
+
+  // Feuilles
+  feuilles.forEach(l => {
+    const g = outCubic(clamp((t - l.d) / 1.2));
+    if (g <= 0) return;
+    const S = proj(0, 0, 55);
+    const T = proj(l.x * c - l.z * s, l.x * s + l.z * c, l.h);
+    items.push({ z: T.z, draw: () => {
+      const dx = (T.x - S.x) * g, dy = (T.y - S.y) * g;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len, ny = dx / len, w = len * 0.24;
+      const ex = S.x + dx, ey = S.y + dy;
+      ctx.fillStyle = mix(VERT2, ombre(T.z));
+      ctx.beginPath();
+      ctx.moveTo(S.x, S.y);
+      ctx.bezierCurveTo(S.x + dx * 0.3 + nx * w, S.y + dy * 0.3 + ny * w, S.x + dx * 0.7 + nx * w, S.y + dy * 0.7 + ny * w, ex, ey);
+      ctx.bezierCurveTo(S.x + dx * 0.7 - nx * w, S.y + dy * 0.7 - ny * w, S.x + dx * 0.3 - nx * w, S.y + dy * 0.3 - ny * w, S.x, S.y);
+      ctx.fill();
+    }});
+  });
+
+  // Tiges + fleurs
+  fleurs.forEach(f => {
+    const u = outCubic(clamp((t - f.d) / 1.6));
+    if (u <= 0) return;
+    const bob = m * Math.sin(t * 1.3 + f.ph) * 3;
+    const tete = pointTige(f, u, c, s, bob);
+    items.push({ z: tete.z, draw: () => {
+      const k = ombre(tete.z);
+      ctx.strokeStyle = mix(VERT, k);
+      ctx.lineWidth = 4 * tete.s;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      const N = 14;
+      for (let j = 0; j <= N; j++) {
+        const p = pointTige(f, u * j / N, c, s, bob);
+        j ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y);
+      }
+      ctx.stroke();
+      const b = outBack(clamp((t - f.d - 1.3) / 1.4));
+      dessineFleur(tete, f, b, f.ph + t * 0.2 * m, k);
+    }});
+  });
+
+  items.sort((a, b) => a.z - b.z).forEach(it => it.draw());
+  dessineEmballage(clamp(t / 0.8));
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* ---------- Interaction : glisser pour faire tourner ---------- */
+cv.addEventListener("pointerdown", e => {
+  drag = true; lastX = e.clientX; lastDelta = 0;
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener("pointermove", e => {
+  if (!drag) return;
+  lastDelta = (e.clientX - lastX) * 0.008;
+  theta += lastDelta;
+  lastX = e.clientX;
+});
+const lache = () => {
+  if (!drag) return;
+  drag = false;
+  vel = Math.max(-3, Math.min(3, lastDelta * 60));
+};
+cv.addEventListener("pointerup", lache);
+cv.addEventListener("pointercancel", lache);
+
+/* ---------- Pétales qui tombent ---------- */
+const COULEURS = ["#ff6f9f", "#ffc2d4", "#f6b93b", "#ff8a65", "#cdbcff"];
+function petalesQuiTombent() {
+  document.querySelectorAll(".petale").forEach(p => p.remove());
+  for (let i = 0; i < 16; i++) {
+    const p = document.createElement("div");
+    p.className = "petale";
+    p.style.left = Math.random() * 100 + "vw";
+    p.style.background = COULEURS[i % COULEURS.length];
+    p.style.setProperty("--dx", (Math.random() * 160 - 80) + "px");
+    p.style.animationDuration = (7 + Math.random() * 6) + "s";
+    p.style.animationDelay = (4 + Math.random() * 10) + "s";
+    document.body.appendChild(p);
+  }
+}
+petalesQuiTombent();
+
+/* ---------- Rejouer ---------- */
+document.getElementById("rejouer").addEventListener("click", () => {
+  t0 = performance.now();
+  const msg = document.querySelector(".message");
+  msg.style.animation = "none";
+  void msg.offsetWidth;
+  msg.style.animation = "";
+  petalesQuiTombent();
+});
+</script>
+</body>
+</html>
